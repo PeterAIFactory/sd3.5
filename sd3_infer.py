@@ -28,6 +28,9 @@ from sd3_impls import (
 )
 from tqdm import tqdm
 
+from typing import Optional, Dict, Union
+import torch.nn as nn
+
 #################################################################################################
 ### Wrappers for model parts
 #################################################################################################
@@ -145,10 +148,11 @@ CONTROLNET_MAP = {
     "time_text_embed.text_embedder.linear_2.weight": "y_embedder.mlp.2.weight",
 }
 
-
+# MARK: SD3 class
 class SD3:
     def __init__(
-        self, model, shift, control_model_file=None, verbose=False, device="cpu"
+        self, model, shift, control_model_file=None, verbose=False, device="cpu",
+        lora_file=None, lora_alpha=0.75
     ):
 
         # NOTE 8B ControlNets were trained with a slightly different forward pass and conditioning,
@@ -171,6 +175,9 @@ class SD3:
                 verbose=verbose,
             ).eval()
             load_into(f, self.model, "model.", "cuda", torch.float16)
+            if lora_file is not None:
+                self.model.load_lora(lora_file, lora_alpha)
+
         if control_model_file is not None:
             control_model_ckpt = safe_open(
                 control_model_file, framework="pt", device=device
@@ -225,9 +232,9 @@ SEED = 23
 SEEDTYPE = "rand"
 # SEEDTYPE = "roll"
 # Actual model file path
-# MODEL = "models/sd3_medium.safetensors"
-# MODEL = "models/sd3.5_large_turbo.safetensors"
-MODEL = "models/sd3.5_large.safetensors"
+# MODEL = "models/sd3.5_medium.safetensors"
+MODEL = "models/sd3.5_large_turbo.safetensors"
+# MODEL = "models/sd3.5_large.safetensors"
 # VAE model file path, or set None to use the same model file
 VAEFile = None  # "models/sd3_vae.safetensors"
 # Optional init image file path
@@ -262,6 +269,8 @@ class SD3Inferencer:
         model_folder: str = MODEL_FOLDER,
         text_encoder_device: str = "cpu",
         verbose=False,
+        lora_file=None,
+        lora_alpha=0.75,
         load_tokenizers: bool = True,
     ):
         self.verbose = verbose
@@ -278,7 +287,7 @@ class SD3Inferencer:
             print("Loading OpenCLIP bigG...")
             self.clip_g = ClipG(model_folder, text_encoder_device)
         print(f"Loading SD3 model {os.path.basename(model)}...")
-        self.sd3 = SD3(model, shift, controlnet_ckpt, verbose, "cuda")
+        self.sd3 = SD3(model, shift, controlnet_ckpt, verbose, "cuda", lora_file, lora_alpha)
         print("Loading VAE model...")
         self.vae = VAE(vae or model)
         print("Models loaded.")
@@ -546,12 +555,14 @@ CONFIGS = {
     },
 }
 
-
+# MARK: Main function
 @torch.no_grad()
 def main(
     prompt=PROMPT,
     model=MODEL,
     out_dir=OUTDIR,
+    lora_file=None,
+    lora_alpha=0.75,
     postfix=None,
     seed=SEED,
     seed_type=SEEDTYPE,
@@ -607,6 +618,8 @@ def main(
         model_folder,
         text_encoder_device,
         verbose,
+        lora_file=lora_file,
+        lora_alpha=lora_alpha,
     )
 
     if isinstance(prompt, str):
@@ -652,3 +665,7 @@ def main(
 
 if __name__ == "__main__":
     fire.Fire(main)
+
+'''
+python sd3_infer.py --prompt "cute wallpaper art of a cat"
+'''

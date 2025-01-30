@@ -149,6 +149,73 @@ class BaseModel(torch.nn.Module):
                 device=device,
                 dtype=dtype,
             )
+        
+        self.lora_state = {}
+        self.loaded_lora = None
+
+    def load_lora(self, lora_path: str, alpha: float = 0.75):
+        """載入 LoRA 權重"""
+        print(f"Loading LoRA from {lora_path} with alpha {alpha}")
+        
+        # 保存當前狀態以便之後可以卸載
+        if not self.lora_state:
+            self.lora_state = {
+                "original_weights": {},
+                "active_lora": None,
+                "alpha": alpha
+            }
+            
+        with safe_open(lora_path, framework="pt", device="cuda") as lora_ckpt:
+            for key in lora_ckpt.keys():
+                base_key = key.split('.lora_')[0]
+                if key.endswith('.lora_down.weight'):
+                    up_key = key.replace('lora_down', 'lora_up')
+                    if up_key in lora_ckpt:
+                        # 獲取 LoRA 權重
+                        down_weight = lora_ckpt.get_tensor(key)
+                        up_weight = lora_ckpt.get_tensor(up_key)
+                        
+                        # 計算合併權重
+                        lora_weight = (up_weight @ down_weight) * alpha
+                        
+                        # 找到對應的基礎層
+                        layer = self.diffusion_model
+                        for part in base_key.split('.'):
+                            layer = getattr(layer, part, None)
+                            if layer is None:
+                                break
+                                
+                        if layer is not None and hasattr(layer, 'weight'):
+                            # 保存原始權重（如果還沒保存）
+                            if base_key not in self.lora_state['original_weights']:
+                                self.lora_state['original_weights'][base_key] = layer.weight.clone()
+                            
+                            # 應用 LoRA 權重
+                            layer.weight = nn.Parameter(
+                                self.lora_state['original_weights'][base_key] + 
+                                lora_weight.to(layer.weight.dtype)
+                            )
+        
+        self.lora_state['active_lora'] = lora_path
+        print(f"LoRA loaded successfully: {lora_path}")
+
+    def unload_lora(self):
+        # 卸載 LoRA 權重
+        if not self.lora_state or not self.lora_state['original_weights']:
+            return
+            
+        for base_key, original_weight in self.lora_state['original_weights'].items():
+            layer = self.diffusion_model
+            for part in base_key.split('.'):
+                layer = getattr(layer, part, None)
+                if layer is None:
+                    break
+                    
+            if layer is not None and hasattr(layer, 'weight'):
+                layer.weight = nn.Parameter(original_weight)
+        
+        self.lora_state = {}
+        print("LoRA unloaded")
 
     def apply_model(self, x, sigma, c_crossattn=None, y=None, skip_layers=[], controlnet_cond=None):
         dtype = self.get_dtype()

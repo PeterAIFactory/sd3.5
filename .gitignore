@@ -2,6 +2,7 @@
 models/
 outputs/
 inputs/
+loras/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
